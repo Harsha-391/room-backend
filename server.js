@@ -75,10 +75,11 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
     console.log(`Processing: ${materialName}`);
 
     // --- STEP A: GEMINI VISION (Better Prompting) ---
+    // --- STEP A: GEMINI VISION ---
     const base64Image = req.file.buffer.toString('base64');
     
     const geminiResponse = await genAI.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-1.5-flash', // Ensure this is the model you are using
       contents: [
         { inlineData: { mimeType: req.file.mimetype, data: base64Image } },
         { text: `The user wants to replace the flooring in this room with: "${materialName}". 
@@ -89,7 +90,25 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
       ]
     });
     
-    const optimizedPrompt = geminiResponse.response.text().trim();
+    // --- FIX IS HERE ---
+    // OLD SDK: geminiResponse.response.text()
+    // NEW SDK: geminiResponse.text (property) OR geminiResponse.text() (function)
+    
+    // Try accessing it as a property first, which is common in the new JS SDK
+    let optimizedPrompt = geminiResponse.text;
+    
+    // If that didn't work (undefined), try calling it as a function
+    if (!optimizedPrompt && typeof geminiResponse.text === 'function') {
+        optimizedPrompt = geminiResponse.text();
+    }
+
+    if (!optimizedPrompt) {
+        // Fallback if both fail (rare)
+        console.warn("⚠️ Could not extract text from Gemini response:", JSON.stringify(geminiResponse));
+        optimizedPrompt = `A room with ${materialName} flooring, photorealistic, 8k`; 
+    }
+    
+    optimizedPrompt = optimizedPrompt.trim();
     console.log(`🤖 Prompt: ${optimizedPrompt}`);
 
     // --- STEP B: SEGMENTATION ---
