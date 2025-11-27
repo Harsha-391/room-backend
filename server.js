@@ -79,7 +79,7 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
     const base64Image = req.file.buffer.toString('base64');
     
     const geminiResponse = await genAI.models.generateContent({
-      model: 'gemini-2.5-flash', // Ensure this is the model you are using
+      model: 'gemini-2.0-flash', // Ensure this is the model you are using
       contents: [
         { inlineData: { mimeType: req.file.mimetype, data: base64Image } },
         { text: `The user wants to replace the flooring in this room with: "${materialName}". 
