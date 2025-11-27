@@ -9,10 +9,18 @@ require('dotenv').config();
 const app = express();
 
 // VERCEL TIP: Use MemoryStorage (Keep file in RAM, not on disk)
-const upload = multer({ storage: multer.memoryStorage() });
-
-app.use(cors());
-app.use(express.json());
+// Limit file size to 5MB and only allow images
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  }
+});
 
 // 1. Setup Gemini
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -29,17 +37,24 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
     console.log(`Processing: ${materialName}`);
 
     // --- STEP A: GEMINI VISION ---
-    // Convert buffer directly to base64 (No file reading needed)
+ // --- STEP A: GEMINI VISION (Enhanced) ---
     const base64Image = req.file.buffer.toString('base64');
     
+    // Ask Gemini to create a perfect prompt for Stability AI
     const geminiResponse = await genAI.models.generateContent({
       model: 'gemini-1.5-flash',
       contents: [
         { inlineData: { mimeType: req.file.mimetype, data: base64Image } },
-        { text: "Describe this room briefly. Mention lighting, style, and floor location." }
+        { text: `The user wants to replace the flooring in this room with: "${materialName}". 
+          Analyze the room's lighting (shadows, temperature), perspective, and style.
+          Write a concise, high-quality text prompt for an inpainting model (like Stable Diffusion) to generate this new floor photorealistically. 
+          Mention the lighting interaction on the floor. 
+          Output ONLY the prompt text.` }
       ]
     });
-    const description = geminiResponse.response.text(); 
+    
+    const optimizedPrompt = geminiResponse.response.text().trim();
+    console.log(`🤖 Gemini Generated Prompt: ${optimizedPrompt}`);
 
     // --- STEP B: SEGMENTATION ---
     // Send the buffer directly (Faster!)
@@ -57,11 +72,12 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
     const maskBuffer = Buffer.from(maskResponse.data);
 
     // --- STEP C: STABILITY AI ---
+   // --- STEP C: STABILITY AI ---
     const formData = new FormData();
-    // Append buffers directly with filenames
     formData.append('image', req.file.buffer, { filename: 'image.jpg' });
     formData.append('mask', maskBuffer, { filename: 'mask.png' });
-    formData.append('prompt', `Replace the floor with ${materialName}. ${description}. Photorealistic, 8k.`);
+    // Use the optimized prompt from Gemini
+    formData.append('prompt', `${optimizedPrompt} . high quality, 8k, photorealistic, interior design`);
     formData.append('output_format', 'png');
 
     const stabilityResponse = await axios.post(
