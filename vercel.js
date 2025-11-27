@@ -1,4 +1,4 @@
-{
+module.exports = {
   "version": 2,
   "rewrites": [
     {
@@ -6,4 +6,4 @@
       "destination": "/server.js"
     }
   ]
-}
+};
