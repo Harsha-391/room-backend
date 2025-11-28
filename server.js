@@ -4,12 +4,11 @@ const multer = require('multer');
 const axios = require('axios');
 const FormData = require('form-data');
 const { GoogleGenAI } = require("@google/genai");
-const mongoose = require('mongoose'); // <--- 1. Import Mongoose
+const mongoose = require('mongoose');
 require('dotenv').config();
 
 const app = express();
 
-// Limit file size to 5MB and only allow images
 const upload = multer({ 
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, 
@@ -25,40 +24,36 @@ const upload = multer({
 app.use(cors());
 app.use(express.json());
 
-// --- 2. DATABASE CONNECTION ---
-// Only connect if the URI is present
-if (process.env.MONGODB_URI) {
-  mongoose.connect(process.env.MONGODB_URI)
+// --- DATABASE CONNECTION ---
+const MONGO_URI = process.env.MONGODB_URI;
+
+if (MONGO_URI) {
+  mongoose.connect(MONGO_URI)
     .then(() => console.log("✅ Connected to MongoDB"))
     .catch(err => console.error("❌ MongoDB Connection Error:", err));
 } else {
-  console.warn("⚠️ MONGODB_URI is missing in .env file");
+  console.log("⚠️ No MONGODB_URI found");
 }
 
-// --- 3. DEFINE THE DATA STRUCTURE (SCHEMA) ---
 const RoomSchema = new mongoose.Schema({
   originalPrompt: String,
   optimizedPrompt: String,
   material: String,
   createdAt: { type: Date, default: Date.now },
-  imageBase64: String, // We will store the final image string here
+  imageBase64: String, 
 });
 
-// Create the model
 const Room = mongoose.model('Room', RoomSchema);
 
-// Setup Gemini
+// --- SETUP GEMINI ---
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 app.get('/', (req, res) => {
   res.send('Room Visualizer Brain is Live on Vercel! 🧠');
 });
 
-// --- 4. HISTORY ENDPOINT ---
-// Call this from your app to see past designs!
 app.get('/history', async (req, res) => {
   try {
-    // Get the last 20 generated rooms, newest first
     const history = await Room.find().sort({ createdAt: -1 }).limit(20);
     res.json(history);
   } catch (error) {
@@ -74,12 +69,11 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
     const materialName = req.body.material || "Marble";
     console.log(`Processing: ${materialName}`);
 
-    // --- STEP A: GEMINI VISION (Better Prompting) ---
     // --- STEP A: GEMINI VISION ---
     const base64Image = req.file.buffer.toString('base64');
     
     const geminiResponse = await genAI.models.generateContent({
-      model: 'gemini-2.0-flash', // Ensure this is the model you are using
+      model: 'gemini-2.0-flash', 
       contents: [
         { inlineData: { mimeType: req.file.mimetype, data: base64Image } },
         { text: `The user wants to replace the flooring in this room with: "${materialName}". 
@@ -90,21 +84,12 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
       ]
     });
     
-    // --- FIX IS HERE ---
-    // OLD SDK: geminiResponse.response.text()
-    // NEW SDK: geminiResponse.text (property) OR geminiResponse.text() (function)
-    
-    // Try accessing it as a property first, which is common in the new JS SDK
-    let optimizedPrompt = geminiResponse.text;
-    
-    // If that didn't work (undefined), try calling it as a function
-    if (!optimizedPrompt && typeof geminiResponse.text === 'function') {
+    let optimizedPrompt = "";
+    if (geminiResponse.text && typeof geminiResponse.text === 'function') {
         optimizedPrompt = geminiResponse.text();
-    }
-
-    if (!optimizedPrompt) {
-        // Fallback if both fail (rare)
-        console.warn("⚠️ Could not extract text from Gemini response:", JSON.stringify(geminiResponse));
+    } else if (geminiResponse.text) {
+        optimizedPrompt = geminiResponse.text;
+    } else {
         optimizedPrompt = `A room with ${materialName} flooring, photorealistic, 8k`; 
     }
     
@@ -148,9 +133,9 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
     const finalImageBase64 = Buffer.from(stabilityResponse.data).toString('base64');
     const finalDataURI = `data:image/png;base64,${finalImageBase64}`;
 
-    // --- 5. SAVE TO DATABASE ---
+    // --- SAVE TO DATABASE ---
     try {
-        if (process.env.MONGODB_URI) {
+        if (mongoose.connection.readyState === 1) {
             const newRoom = await Room.create({
                 originalPrompt: materialName,
                 optimizedPrompt: optimizedPrompt,
@@ -160,10 +145,9 @@ app.post('/generate-room', upload.single('image'), async (req, res) => {
             console.log(`💾 Saved to DB: ${newRoom._id}`);
         }
     } catch (dbError) {
-        console.error("⚠️ Database Save Failed (Image returned anyway):", dbError);
+        console.error("⚠️ Database Save Failed:", dbError);
     }
 
-    // Return success even if DB fails (User gets their image)
     res.status(200).json({
         success: true,
         data: finalDataURI,
